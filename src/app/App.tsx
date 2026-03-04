@@ -650,6 +650,38 @@ let nextDecorationId = 200;
 // App
 // ═══════════════════════════════════════════
 
+// ═══════════════════════════════════════════
+// Custom palette persistence
+// ═══════════════════════════════════════════
+
+interface CustomPalette {
+  name: string;
+  colors: string[];
+}
+
+const CUSTOM_PALETTES_KEY = 'wordmark-custom-palettes';
+
+function loadCustomPalettes(): CustomPalette[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_PALETTES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (p: unknown): p is CustomPalette =>
+        typeof p === 'object' && p !== null &&
+        typeof (p as CustomPalette).name === 'string' &&
+        Array.isArray((p as CustomPalette).colors) &&
+        (p as CustomPalette).colors.length >= 3 &&
+        (p as CustomPalette).colors.length <= 5
+    );
+  } catch { return []; }
+}
+
+function saveCustomPalettes(palettes: CustomPalette[]) {
+  localStorage.setItem(CUSTOM_PALETTES_KEY, JSON.stringify(palettes));
+}
+
 export default function App() {
   const getInitialState = () => {
     const params = new URLSearchParams(window.location.search);
@@ -700,6 +732,10 @@ export default function App() {
   const [decorations, setDecorations] = useState<DecorationInstance[]>(initialState.decorations);
   const [textZone, setTextZone] = useState<TextZone>({ left: -200, right: 200, top: -60, bottom: 60 });
   const [dragging, setDragging] = useState<{ decId: number; startX: number; startY: number; origOffsetX: number; origOffsetY: number } | null>(null);
+  const [customPalettes, setCustomPalettes] = useState<CustomPalette[]>(loadCustomPalettes);
+  const [showPaletteCreator, setShowPaletteCreator] = useState(false);
+  const [newPaletteName, setNewPaletteName] = useState('');
+  const [newPaletteColors, setNewPaletteColors] = useState<string[]>(['#FF6B6B', '#4ECDC4', '#45B7D1']);
 
   // ── Drag-to-move handlers ──
 
@@ -834,7 +870,7 @@ export default function App() {
     'Caveat', 'Montserrat', 'Space Grotesk', 'Outfit'
   ];
 
-  const colorPalettes = [
+  const builtInPalettes = useMemo(() => [
     { name: 'Pastel Dream', colors: ['#C3E2E6', '#F7DAE5', '#D0CCE0', '#FFF2E1'] },
     { name: 'Earthy Tones', colors: ['#635573', '#79BAA9', '#F6D1A7', '#C78175'] },
     { name: 'Sunset Vibes', colors: ['#A891BF', '#D99EB0', '#FFCDAB', '#FFE8BD', '#81B4B8'] },
@@ -842,13 +878,18 @@ export default function App() {
     { name: 'Neon Nights', colors: ['#FF10F0', '#00F0FF', '#39FF14', '#FFF01F', '#FF006E'] },
     { name: 'Retro Toy Box', colors: ['#FF4444', '#4169E1', '#FFD700', '#32CD32', '#FF69B4'] },
     { name: 'Miami Vice', colors: ['#FF00FF', '#00FFFF', '#7B68EE', '#FFD700', '#FF1493'] }
-  ];
+  ], []);
 
-  const colors = colorPalettes[paletteIndex].colors.slice(0, numColors);
+  const allPalettes = useMemo(() => [...builtInPalettes, ...customPalettes], [builtInPalettes, customPalettes]);
+
+  // Fall back to palette 0 if current index is out of range (e.g. custom palette was deleted or URL references missing palette)
+  const safePaletteIndex = paletteIndex < allPalettes.length ? paletteIndex : 0;
+
+  const colors = allPalettes[safePaletteIndex].colors.slice(0, numColors);
   const displayColors = numColors === 1
-    ? [colorPalettes[paletteIndex].colors[selectedColorIndex]]
+    ? [allPalettes[safePaletteIndex].colors[selectedColorIndex]]
     : colors;
-  const fullPaletteColors = colorPalettes[paletteIndex].colors;
+  const fullPaletteColors = allPalettes[safePaletteIndex].colors;
 
   const hexToRgb = (hex: string) => {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -1271,21 +1312,142 @@ export default function App() {
             {/* Palette */}
             <div className="mt-4">
               <label className="block text-sm font-medium text-neutral-700 mb-2">Color Palette</label>
-              <select value={paletteIndex} onChange={(e) => setPaletteIndex(parseInt(e.target.value))} className="w-full px-4 py-2 border border-neutral-300 rounded-md">
-                {colorPalettes.map((p, i) => <option key={i} value={i}>{p.name}</option>)}
-              </select>
+              <div className="flex gap-2">
+                <select value={safePaletteIndex} onChange={(e) => setPaletteIndex(parseInt(e.target.value))} className="flex-1 px-4 py-2 border border-neutral-300 rounded-md">
+                  <optgroup label="Built-in">
+                    {builtInPalettes.map((p, i) => <option key={i} value={i}>{p.name}</option>)}
+                  </optgroup>
+                  {customPalettes.length > 0 && (
+                    <optgroup label="Custom">
+                      {customPalettes.map((p, i) => <option key={`c${i}`} value={builtInPalettes.length + i}>{p.name}</option>)}
+                    </optgroup>
+                  )}
+                </select>
+                {safePaletteIndex >= builtInPalettes.length && (
+                  <button
+                    onClick={() => {
+                      const customIdx = safePaletteIndex - builtInPalettes.length;
+                      const updated = customPalettes.filter((_, i) => i !== customIdx);
+                      setCustomPalettes(updated);
+                      saveCustomPalettes(updated);
+                      setPaletteIndex(0);
+                    }}
+                    className="px-2 py-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors text-sm"
+                    title="Delete custom palette"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setShowPaletteCreator(!showPaletteCreator)}
+                className="mt-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
+              >
+                {showPaletteCreator ? '− Cancel' : '+ New Palette'}
+              </button>
+              {showPaletteCreator && (
+                <div className="mt-3 p-3 border border-neutral-200 rounded-lg bg-neutral-50 space-y-3">
+                  <input
+                    type="text"
+                    value={newPaletteName}
+                    onChange={(e) => setNewPaletteName(e.target.value)}
+                    placeholder="Palette name"
+                    className="w-full px-3 py-1.5 border border-neutral-300 rounded-md text-sm"
+                  />
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-neutral-600">Colors ({newPaletteColors.length}/5)</label>
+                    {newPaletteColors.map((color, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={color}
+                          onChange={(e) => {
+                            const updated = [...newPaletteColors];
+                            updated[idx] = e.target.value;
+                            setNewPaletteColors(updated);
+                          }}
+                          className="w-8 h-8 rounded cursor-pointer border-0"
+                        />
+                        <input
+                          type="text"
+                          value={color}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
+                              const updated = [...newPaletteColors];
+                              updated[idx] = val;
+                              setNewPaletteColors(updated);
+                            }
+                          }}
+                          className="flex-1 px-2 py-1 border border-neutral-300 rounded text-sm font-mono"
+                        />
+                        {newPaletteColors.length > 3 && (
+                          <button
+                            onClick={() => setNewPaletteColors(newPaletteColors.filter((_, i) => i !== idx))}
+                            className="text-red-400 hover:text-red-600 text-sm"
+                          >×</button>
+                        )}
+                      </div>
+                    ))}
+                    {newPaletteColors.length < 5 && (
+                      <button
+                        onClick={() => setNewPaletteColors([...newPaletteColors, '#888888'])}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                      >+ Add color</button>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const name = newPaletteName.trim();
+                        if (!name || newPaletteColors.length < 3 || newPaletteColors.some(c => !/^#[0-9A-Fa-f]{6}$/.test(c))) return;
+                        const newPalette: CustomPalette = { name, colors: [...newPaletteColors] };
+                        const updated = [...customPalettes, newPalette];
+                        setCustomPalettes(updated);
+                        saveCustomPalettes(updated);
+                        setPaletteIndex(builtInPalettes.length + updated.length - 1);
+                        setNewPaletteName('');
+                        setNewPaletteColors(['#FF6B6B', '#4ECDC4', '#45B7D1']);
+                        setShowPaletteCreator(false);
+                      }}
+                      disabled={!newPaletteName.trim() || newPaletteColors.some(c => !/^#[0-9A-Fa-f]{6}$/.test(c))}
+                      className="px-3 py-1.5 bg-neutral-800 text-white text-sm rounded-md hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowPaletteCreator(false);
+                        setNewPaletteName('');
+                        setNewPaletteColors(['#FF6B6B', '#4ECDC4', '#45B7D1']);
+                      }}
+                      className="px-3 py-1.5 text-sm text-neutral-600 hover:text-neutral-800 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {/* Preview */}
+                  {newPaletteColors.length >= 3 && (
+                    <div className="flex gap-1 pt-1">
+                      {newPaletteColors.map((c, i) => (
+                        <div key={i} className="h-4 flex-1 rounded-sm" style={{ backgroundColor: c }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             {/* Num colors */}
             <div className="mt-4">
               <label className="block text-sm font-medium text-neutral-700 mb-2">Colors ({numColors})</label>
-              <input type="range" value={numColors} onChange={(e) => setNumColors(parseInt(e.target.value))} min="1" max={colorPalettes[paletteIndex].colors.length} className="w-full" />
+              <input type="range" value={numColors} onChange={(e) => setNumColors(parseInt(e.target.value))} min="1" max={allPalettes[safePaletteIndex].colors.length} className="w-full" />
             </div>
             {/* Single color picker */}
             {numColors === 1 && (
               <div className="mt-4">
                 <label className="block text-sm font-medium text-neutral-700 mb-2">Select Color</label>
                 <div className="flex flex-wrap gap-2">
-                  {colorPalettes[paletteIndex].colors.map((color, idx) => (
+                  {allPalettes[safePaletteIndex].colors.map((color, idx) => (
                     <button key={idx} onClick={() => setSelectedColorIndex(idx)}
                       className={`w-12 h-12 rounded-md border-2 transition-all ${selectedColorIndex === idx ? 'border-neutral-900 scale-110' : 'border-neutral-300'}`}
                       style={{ backgroundColor: adjustSaturation(color, saturation) }} />
